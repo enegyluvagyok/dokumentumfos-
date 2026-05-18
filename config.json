@@ -1,0 +1,107 @@
+{
+  "defaults": {
+    "projekt": "Analyse",
+    "alkalmazas": "Analyse - QA for Analysts",
+    "rovidnev": "ANALYSE",
+    "azonosito": "ANALYSE",
+    "megrendelo": "IDOMSOFT",
+    "verzio": "1.0",
+    "en": "Seres Zoltán",
+    "elosztasi": "IdomSoft Zrt.",
+    "template": "sablon.docx"
+  },
+  "documents": [
+    {
+      "name": "felhasznaloi-kezikonyv",
+      "tipus": "FK",
+      "cim": "Felhasználói kézikönyv",
+      "alcim": "Analyse rendszer felhasználói dokumentáció",
+      "cel": "A dokumentum célja az Analyse rendszer felhasználói funkcióinak bemutatása.",
+      "files": [
+        "tech/telepitesi-kezikoenyv",
+        "introduction",
+        "quickstart",
+        "concepts",
+        "projects/overview",
+        "projects/modules",
+        "projects/journeys",
+        "projects/journey-versions",
+        "projects/event-scheme",
+        "test-plans/overview",
+        "test-plans/building",
+        "test-plans/assigning",
+        "test-runs/overview",
+        "test-runs/running",
+        "test-runs/results",
+        "integrations/issue-trackers",
+        "integrations/figma",
+        "integrations/export-import",
+        "settings/custom-fields",
+        "integrations/cmp",
+        "integrations/activity-log",
+        "integrations/charts"
+      ]
+    },
+    {
+      "name": "uzemeltetesi-kezikonyv",
+      "tipus": "UK",
+      "cim": "Üzemeltetési kézikönyv",
+      "alcim": "Analyse rendszer üzemeltetési dokumentáció",
+      "cel": "A dokumentum célja az Analyse rendszer üzemeltetési, karbantartási, konfigurációs és támogatási feladatainak bemutatása.",
+      "files": [
+        "tech/telepitesi-kezikoenyv",
+        "integrations/activity-log",
+        "integrations/export-import",
+        "settings/custom-fields"
+      ]
+    },
+    {
+      "name": "logikai-rendszerterv",
+      "tipus": "LRT",
+      "cim": "Logikai rendszerterv",
+      "alcim": "Analyse rendszer logikai felépítése",
+      "cel": "A dokumentum célja az Analyse rendszer logikai működésének, moduljainak, folyamatainak és kapcsolódási pontjainak bemutatása.",
+      "files": ["tech/logikai-rendszerterv"]
+    },
+    {
+      "name": "fizikai-rendszerterv",
+      "tipus": "FRT",
+      "cim": "Fizikai rendszerterv",
+      "alcim": "Analyse rendszer fizikai környezete és infrastruktúrája",
+      "cel": "A dokumentum célja az Analyse rendszer fizikai infrastruktúrájának, futtatási környezetének és telepítési összetevőinek bemutatása.",
+      "files": ["tech/fizikai-rendszerterv"]
+    },
+    {
+      "name": "adatbazis-terv",
+      "tipus": "DBT",
+      "cim": "Adatbázis terv",
+      "alcim": "Analyse rendszer adatmodellje és adatbázis-struktúrája",
+      "cel": "A dokumentum célja az Analyse rendszer adatbázisának, főbb entitásainak, adattábláinak és kapcsolatrendszerének bemutatása.",
+      "files": ["tech/adatbazis-terv"]
+    },
+    {
+      "name": "architektura-terv",
+      "tipus": "AT",
+      "cim": "Architektúra terv",
+      "alcim": "Analyse rendszer architekturális felépítése",
+      "cel": "A dokumentum célja az Analyse rendszer architektúrájának, technológiai rétegeinek és főbb komponenseinek bemutatása.",
+      "files": ["tech/architekturaterv"]
+    },
+    {
+      "name": "igazgatasi-rendszerterv",
+      "tipus": "IRT",
+      "cim": "Igazgatási rendszerterv",
+      "alcim": "Analyse rendszer igazgatási és jogosultsági működése",
+      "cel": "A dokumentum célja az Analyse rendszer igazgatási, jogosultsági, adminisztratív és szervezeti működésének bemutatása.",
+      "files": ["tech/igazgatasi-rendszerterv"]
+    },
+    {
+      "name": "fuggelek",
+      "tipus": "FUG",
+      "cim": "Függelék",
+      "alcim": "Analyse rendszer dokumentációs mellékletei",
+      "cel": "A dokumentum célja a kapcsolódó mellékletek, képernyőképek és kiegészítő információk gyűjtése.",
+      "files": ["appendix/screenshots"]
+    }
+  ]
+}

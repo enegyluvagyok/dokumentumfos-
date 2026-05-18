@@ -3,14 +3,78 @@ import path from 'path';
 import { execFileSync } from 'child_process';
 import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
+import sharp from 'sharp';
 
 const PROJECT_ROOT = process.cwd();
-
+const CONFIG_PATH = path.join(PROJECT_ROOT, 'config.json');
 const INPUT_DIR = path.join(PROJECT_ROOT, 'mintlify-docs');
 const OUTPUT_DIR = path.join(PROJECT_ROOT, 'output_docx');
 const TEMPLATE_PATH = path.join(PROJECT_ROOT, 'sablon.docx');
 const REFERENCE_DOCX = path.join(PROJECT_ROOT, 'reference.docx');
 const TEMP_DIR = path.join(PROJECT_ROOT, '.tmp-pandoc');
+const TEMP_IMAGE_DIR = path.join(PROJECT_ROOT, '.tmp-images');
+
+function loadConfig() {
+  if (!fs.existsSync(CONFIG_PATH)) {
+    throw new Error(`Hiányzik a config.json: ${CONFIG_PATH}`);
+  }
+
+  const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
+  const config = JSON.parse(raw);
+
+  if (!Array.isArray(config.documents)) {
+    throw new Error('A config.json documents mezője kötelező tömb.');
+  }
+
+  return config;
+}
+
+async function buildCombinedMdx(documentConfig) {
+  const parts = [];
+
+  for (const relativeFile of documentConfig.files) {
+    const fullPath = resolveMdxFile(relativeFile);
+    const cleaned = await cleanMdx(fullPath);
+
+    parts.push(`\n\n<!-- SOURCE: ${relativeFile} -->\n\n`);
+    parts.push(cleaned);
+  }
+
+  return parts.join('\n\n');
+}
+
+async function optimizeImage(originalPath) {
+  fs.mkdirSync(TEMP_IMAGE_DIR, {
+    recursive: true,
+  });
+
+  const ext = path.extname(originalPath).toLowerCase();
+
+  const targetPath = path.join(TEMP_IMAGE_DIR, `${safeName(path.basename(originalPath, ext))}.png`);
+
+  try {
+    await sharp(originalPath)
+      .rotate()
+      .resize({
+        width: 600,
+        height: 600,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .png({
+        compressionLevel: 9,
+        quality: 80,
+      })
+      .toFile(targetPath);
+
+    return toPandocPath(targetPath);
+  } catch (error) {
+    console.warn(`[FIGYELEM] Kép optimalizálás sikertelen: ${originalPath}`);
+    console.warn(error.message);
+
+    return toPandocPath(originalPath);
+  }
+}
 
 function toPandocPath(filePath) {
   return filePath.replace(/\\/g, '/');
@@ -71,27 +135,125 @@ function convertBracketBlocksToBoxes(content) {
   return output.join('\n');
 }
 
-function cleanMdx(filePath) {
+function resolveImagePath(imagePath, mdxFilePath) {
+  const cleanPath = imagePath.split('?')[0].replace(/^\/+/, '');
+
+  const candidates = [
+    path.join(PROJECT_ROOT, cleanPath),
+    path.join(PROJECT_ROOT, 'mintlify-docs', cleanPath),
+    path.join(PROJECT_ROOT, 'public', cleanPath),
+    path.join(PROJECT_ROOT, 'images', cleanPath.replace(/^images[\\/]/, '')),
+    path.join(path.dirname(mdxFilePath), imagePath),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return toPandocPath(candidate);
+    }
+  }
+
+  console.warn(`[FIGYELEM] Kép nem található: ${imagePath}`);
+
+  return imagePath;
+}
+
+function resolveMdxFile(relativeFile) {
+  const candidates = [
+    path.join(INPUT_DIR, relativeFile),
+    path.join(INPUT_DIR, `${relativeFile}.mdx`),
+    path.join(INPUT_DIR, `${relativeFile}.md`),
+    path.join(INPUT_DIR, relativeFile, 'index.mdx'),
+    path.join(INPUT_DIR, relativeFile, 'index.md'),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error(`MDX fájl nem található: ${relativeFile}`);
+}
+
+async function cleanMdx(filePath) {
   let content = fs.readFileSync(filePath, 'utf8');
 
   content = content.replace(/^import\s.+$/gm, '');
   content = content.replace(/^export\s.+$/gm, '');
 
-  content = content.replace(/\]\((\/images\/[^)]+)\)/g, (_, imagePath) => {
-    const absolutePath = path.join(PROJECT_ROOT, imagePath.replace(/^\//, ''));
+  content = content.replace(/\{\/\*[\s\S]*?\*\/\}/g, '');
 
-    return `](${toPandocPath(absolutePath)})`;
+  content = content.replace(/\{["'`]([^"'`]+)["'`]\}/g, '$1');
+
+  content = content.replace(/\s+[a-zA-Z0-9_-]+=\[[\s\S]*?\]/g, '');
+  content = content.replace(/\s+[a-zA-Z0-9_-]+=\{[\s\S]*?\}/g, '');
+
+  content = content.replace(/<Note[^>]*>/g, '\n> **Megjegyzés:** ');
+  content = content.replace(/<\/Note>/g, '\n');
+
+  content = content.replace(/<Warning[^>]*>/g, '\n> **Figyelmeztetés:** ');
+  content = content.replace(/<\/Warning>/g, '\n');
+
+  content = content.replace(/<Tip[^>]*>/g, '\n> **Tipp:** ');
+  content = content.replace(/<\/Tip>/g, '\n');
+
+  content = content.replace(/<Info[^>]*>/g, '\n> **Információ:** ');
+  content = content.replace(/<\/Info>/g, '\n');
+
+  content = content.replace(/<Check[^>]*>/g, '\n> **Ellenőrzés:** ');
+  content = content.replace(/<\/Check>/g, '\n');
+
+  content = content.replace(/<Card[^>]*title=["']([^"']+)["'][^>]*>/g, '\n### $1\n');
+  content = content.replace(/<\/Card>/g, '\n');
+
+  content = content.replace(/<Accordion[^>]*title=["']([^"']+)["'][^>]*>/g, '\n### $1\n');
+  content = content.replace(/<\/Accordion>/g, '\n');
+
+  content = content.replace(/<Tab[^>]*title=["']([^"']+)["'][^>]*>/g, '\n### $1\n');
+  content = content.replace(/<\/Tab>/g, '\n');
+
+  content = content.replace(/<\/?Tabs[^>]*>/g, '\n');
+  content = content.replace(/<\/?Steps[^>]*>/g, '\n');
+
+  content = content.replace(/<Step[^>]*title=["']([^"']+)["'][^>]*>/g, '\n### $1\n');
+  content = content.replace(/<\/Step>/g, '\n');
+
+  content = content.replace(/!\[([^\]]*)\]\((\/images\/[^)]+)\)/g, (_, alt, imagePath) => {
+    return `![${alt}](${resolveImagePath(imagePath, filePath)})`;
   });
 
-  content = content.replace(/src=["'](\/images\/[^"']+)["']/g, (_, imagePath) => {
-    const absolutePath = path.join(PROJECT_ROOT, imagePath.replace(/^\//, ''));
-
-    return `src="${toPandocPath(absolutePath)}"`;
+  content = content.replace(/!\[([^\]]*)\]\((\.\/images\/[^)]+)\)/g, (_, alt, imagePath) => {
+    return `![${alt}](${resolveImagePath(imagePath, filePath)})`;
   });
+
+  content = content.replace(/!\[([^\]]*)\]\((images\/[^)]+)\)/g, (_, alt, imagePath) => {
+    return `![${alt}](${resolveImagePath(imagePath, filePath)})`;
+  });
+
+  content = content.replace(/<img[^>]*src=["']([^"']+)["'][^>]*alt=["']([^"']*)["'][^>]*\/?>/g, (_, src, alt) => {
+    return `![${alt || 'image'}](${resolveImagePath(src, filePath)})`;
+  });
+
+  content = content.replace(/<img[^>]*alt=["']([^"']*)["'][^>]*src=["']([^"']+)["'][^>]*\/?>/g, (_, alt, src) => {
+    return `![${alt || 'image'}](${resolveImagePath(src, filePath)})`;
+  });
+
+  content = content.replace(/<img[^>]*src=["']([^"']+)["'][^>]*\/?>/g, (_, src) => {
+    return `![image](${resolveImagePath(src, filePath)})`;
+  });
+
+  content = content.replace(/\[object Object\]/g, '');
+  content = content.replace(/\{\s*\[[\s\S]*?\]\s*\}/g, '');
+  content = content.replace(/\[\s*\]/g, '');
+  content = content.replace(/\{\s*\}/g, '');
+  content = content.replace(/<\/?[A-Z][A-Za-z0-9]*(\s+[^>]*)?>/g, '');
+  content = content.replace(/<!--[\s\S]*?-->/g, '');
 
   content = convertBracketBlocksToBoxes(content);
 
-  return content;
+  content = content.replace(/\n{3,}/g, '\n\n');
+
+  return content.trim() + '\n';
 }
 
 function getTitleFromMdx(mdxContent, filePath) {
@@ -121,27 +283,45 @@ function createPandocDocx(mdxContent, mdxPath) {
   });
 
   const baseName = safeName(path.basename(mdxPath, path.extname(mdxPath)));
+  const timestamp = Date.now();
 
-  const tempDocxPath = path.join(TEMP_DIR, `${baseName}-${Date.now()}.docx`);
+  const tempMarkdownPath = path.join(TEMP_DIR, `${baseName}-${timestamp}.md`);
+  const tempDocxPath = path.join(TEMP_DIR, `${baseName}-${timestamp}.docx`);
+
+  fs.writeFileSync(tempMarkdownPath, mdxContent, 'utf8');
 
   const resourcePath = [
     PROJECT_ROOT,
     INPUT_DIR,
+    path.join(PROJECT_ROOT, 'public'),
     path.join(PROJECT_ROOT, 'images'),
     path.join(PROJECT_ROOT, 'images', 'screenshots'),
     path.dirname(mdxPath),
   ].join(path.delimiter);
 
-  const pandocArgs = ['-f', 'markdown', '-t', 'docx'];
+  const pandocArgs = [
+    tempMarkdownPath,
+
+    '-o',
+    tempDocxPath,
+
+    '--from',
+    'markdown+pipe_tables+fenced_code_blocks+raw_html+tex_math_dollars',
+
+    '--to',
+    'docx',
+
+    '--standalone',
+
+    '--resource-path',
+    resourcePath,
+  ];
 
   if (fs.existsSync(REFERENCE_DOCX)) {
     pandocArgs.push('--reference-doc', REFERENCE_DOCX);
   }
 
-  pandocArgs.push(`--resource-path=${resourcePath}`, '--embed-resources', '-o', tempDocxPath);
-
   execFileSync('pandoc', pandocArgs, {
-    input: mdxContent,
     cwd: PROJECT_ROOT,
     stdio: ['pipe', 'pipe', 'pipe'],
     maxBuffer: 1024 * 1024 * 100,
@@ -153,6 +333,7 @@ function createPandocDocx(mdxContent, mdxPath) {
 
   const buffer = fs.readFileSync(tempDocxPath);
 
+  fs.unlinkSync(tempMarkdownPath);
   fs.unlinkSync(tempDocxPath);
 
   return buffer;
@@ -171,33 +352,15 @@ function forceParagraphStyle(xml, fromStyleIds, toStyleId) {
 function forceNiceStyles(rawXml) {
   let xml = rawXml;
 
-  // -------------------------------------------------
-  // CÍM / ALCÍM
-  // -------------------------------------------------
-
   xml = forceParagraphStyle(xml, ['Title', 'Cm'], 'Cmsor1');
-
-  xml = forceParagraphStyle(xml, ['Subtitle', 'Alcm'], 'Cmsor2');
-
-  // -------------------------------------------------
-  // CÍMSOROK
-  // -------------------------------------------------
+  xml = forceParagraphStyle(xml, ['Subtitle', 'Alcm'], 'Nincstrkz');
 
   xml = forceParagraphStyle(xml, ['Heading1', 'heading 1', 'Heading 1', 'Cmsor1'], 'Cmsor1');
-
   xml = forceParagraphStyle(xml, ['Heading2', 'heading 2', 'Heading 2', 'Cmsor2'], 'Cmsor2');
-
   xml = forceParagraphStyle(xml, ['Heading3', 'heading 3', 'Heading 3', 'Cmsor3'], 'Cmsor3');
-
   xml = forceParagraphStyle(xml, ['Heading4', 'heading 4', 'Heading 4', 'Cmsor4'], 'Cmsor4');
-
-  xml = forceParagraphStyle(xml, ['Heading5', 'heading 5', 'Heading 5', 'Cmsor5'], 'Cmsor5');
-
-  xml = forceParagraphStyle(xml, ['Heading6', 'heading 6', 'Heading 6', 'Cmsor6'], 'Cmsor6');
-
-  // -------------------------------------------------
-  // NORML SZÖVEG
-  // -------------------------------------------------
+  xml = forceParagraphStyle(xml, ['Heading5', 'heading 5', 'Heading 5', 'Cmsor5'], 'Norml');
+  xml = forceParagraphStyle(xml, ['Heading6', 'heading 6', 'Heading 6', 'Cmsor6'], 'Norml');
 
   xml = forceParagraphStyle(
     xml,
@@ -205,15 +368,7 @@ function forceNiceStyles(rawXml) {
     'Norml'
   );
 
-  // -------------------------------------------------
-  // IDÉZET / INFO BOX
-  // -------------------------------------------------
-
   xml = forceParagraphStyle(xml, ['Quote', 'BlockText', 'Block Text', 'IntenseQuote', 'Idzet'], 'Nincstrkz');
-
-  // -------------------------------------------------
-  // LISTÁK
-  // -------------------------------------------------
 
   xml = forceParagraphStyle(
     xml,
@@ -230,15 +385,7 @@ function forceNiceStyles(rawXml) {
     'Norml'
   );
 
-  // -------------------------------------------------
-  // KÉPALÁÍRÁS
-  // -------------------------------------------------
-
   xml = forceParagraphStyle(xml, ['Caption', 'caption', 'ImageCaption', 'FigureCaption'], 'Norml');
-
-  // -------------------------------------------------
-  // KÓDBLOKK
-  // -------------------------------------------------
 
   xml = forceParagraphStyle(
     xml,
@@ -246,44 +393,22 @@ function forceNiceStyles(rawXml) {
     'Nincstrkz'
   );
 
-  // -------------------------------------------------
-  // TARTALOMJEGYZÉK
-  // -------------------------------------------------
-
   xml = forceParagraphStyle(xml, ['TOCHeading', 'TOC Heading'], 'Cmsor1');
 
   xml = forceParagraphStyle(xml, ['TOC1', 'toc 1'], 'Norml');
-
   xml = forceParagraphStyle(xml, ['TOC2', 'toc 2'], 'Norml');
-
   xml = forceParagraphStyle(xml, ['TOC3', 'toc 3'], 'Norml');
-
   xml = forceParagraphStyle(xml, ['TOC4', 'toc 4'], 'Norml');
-
   xml = forceParagraphStyle(xml, ['TOC5', 'toc 5'], 'Norml');
-
   xml = forceParagraphStyle(xml, ['TOC6', 'toc 6'], 'Norml');
 
-  // -------------------------------------------------
-  // INLINE STYLE CLEANUP
-  // -------------------------------------------------
-
   xml = xml.replace(/<w:rStyle w:val="Hyperlink"\/>/g, '');
-
   xml = xml.replace(/<w:rStyle w:val="Strong"\/>/g, '<w:b/>');
-
   xml = xml.replace(/<w:rStyle w:val="Emphasis"\/>/g, '<w:i/>');
-
   xml = xml.replace(/<w:rStyle w:val="VerbatimChar"\s*\/>/g, '');
 
-  // -------------------------------------------------
-  // FOOTNOTE / BIB CLEANUP
-  // -------------------------------------------------
-
   xml = xml.replace(/<w:pStyle w:val="FootnoteText"\/>/g, '<w:pStyle w:val="Norml"/>');
-
   xml = xml.replace(/<w:pStyle w:val="EndnoteText"\/>/g, '<w:pStyle w:val="Norml"/>');
-
   xml = xml.replace(/<w:pStyle w:val="Bibliography"\/>/g, '<w:pStyle w:val="Norml"/>');
 
   return xml;
@@ -311,7 +436,6 @@ function applyTableBorders(rawXml) {
       let tblPr = tblPrMatch[0];
 
       tblPr = tblPr.replace(/<w:tblBorders>[\s\S]*?<\/w:tblBorders>/g, '');
-
       tblPr = tblPr.replace(/<w:tblLook[^>]*\/>/g, '');
 
       tblPr = tblPr.replace('</w:tblPr>', `${bordersXml}${tblLookXml}</w:tblPr>`);
@@ -346,9 +470,7 @@ function styleFirstTableRow(rawXml) {
     let firstRow = firstRowMatch[0];
 
     firstRow = firstRow.replace(/<w:tcPr>/g, `<w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="EEF2FF"/>`);
-
     firstRow = firstRow.replace(/<w:rPr>/g, `<w:rPr><w:b/>`);
-
     firstRow = firstRow.replace(/<w:rPr\/>/g, `<w:rPr><w:b/></w:rPr>`);
 
     const updatedInner = tableInner.replace(firstRowMatch[0], firstRow);
@@ -385,7 +507,6 @@ function extractPandocBodyXml(pandocZip) {
   let rawXml = bodyMatch[1];
 
   rawXml = rawXml.replace(/<w:sectPr[^>]*>.*?<\/w:sectPr>/gs, '');
-
   rawXml = polishWordXml(rawXml);
 
   return rawXml;
@@ -512,11 +633,8 @@ function injectPandocImagesIntoTemplate(rawXml, pandocZip, templateZip, uniquePr
   }
 
   let templateRelsXml = ensureDocumentRels(templateZip);
-
   let nextRid = getNextRid(templateRelsXml);
-
   let updatedXml = rawXml;
-
   let copiedCount = 0;
 
   for (const rel of imageRelationships) {
@@ -539,11 +657,8 @@ function injectPandocImagesIntoTemplate(rawXml, pandocZip, templateZip, uniquePr
     const ext = path.extname(sourceMediaPath) || '.png';
 
     const newFileName = `${uniquePrefix}-${path.basename(sourceMediaPath)}`;
-
     const newTarget = `media/${newFileName}`;
-
     const newMediaPath = `word/${newTarget}`;
-
     const newRid = `rId${nextRid++}`;
 
     templateZip.file(newMediaPath, sourceMediaFile.asUint8Array());
@@ -551,7 +666,6 @@ function injectPandocImagesIntoTemplate(rawXml, pandocZip, templateZip, uniquePr
     templateRelsXml = addRelationship(templateRelsXml, newRid, rel.type, newTarget);
 
     updatedXml = updatedXml.replaceAll(`r:embed="${oldRid}"`, `r:embed="${newRid}"`);
-
     updatedXml = updatedXml.replaceAll(`r:link="${oldRid}"`, `r:link="${newRid}"`);
 
     ensureContentType(templateZip, ext, getImageContentType(ext));
@@ -592,7 +706,6 @@ function forceAllTablesToTable1(zip) {
   let xml = documentFile.asText();
 
   xml = xml.replace(/<w:tblStyle w:val="[^"]+"\s*\/>/g, '<w:tblStyle w:val="Table1"/>');
-
   xml = xml.replace(/<w:tblPr>(?![\s\S]*?<w:tblStyle)/g, '<w:tblPr><w:tblStyle w:val="Table1"/>');
 
   zip.file(documentPath, xml);
@@ -635,20 +748,49 @@ function removeAllBookmarks(zip) {
   let xml = documentFile.asText();
 
   xml = xml.replace(/<w:bookmarkStart[\s\S]*?\/>/g, '');
-
   xml = xml.replace(/<w:bookmarkEnd[\s\S]*?\/>/g, '');
 
   zip.file(documentPath, xml);
 }
 
-function generateDocx(mdxPath, templatePath, outputPath) {
-  const cleanedMdx = cleanMdx(mdxPath);
+async function replaceImagesWithOptimizedVersions(content, filePath) {
+  const imageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+  const matches = [...content.matchAll(imageRegex)];
+
+  for (const match of matches) {
+    const fullMatch = match[0];
+    const alt = match[1];
+    const imagePath = match[2];
+
+    if (imagePath.startsWith('http://') || imagePath.startsWith('https://') || imagePath.startsWith('data:')) {
+      continue;
+    }
+
+    const optimized = await optimizeImage(imagePath);
+
+    content = content.replace(fullMatch, `![${alt}](${optimized})`);
+  }
+
+  return content;
+}
+
+async function generateConfiguredDocx(documentConfig) {
+  let combinedMdx = await buildCombinedMdx(documentConfig);
+
+  combinedMdx = await replaceImagesWithOptimizedVersions(combinedMdx, INPUT_DIR);
+
+  const templatePath = path.join(PROJECT_ROOT, documentConfig.template || 'sablon.docx');
+
+  const outputPath = path.join(PROJECT_ROOT, documentConfig.output || `output_docx/${documentConfig.name}.docx`);
+
+  fs.mkdirSync(path.dirname(outputPath), {
+    recursive: true,
+  });
 
   const templateFile = fs.readFileSync(templatePath, 'binary');
-
   const templateZip = new PizZip(templateFile);
 
-  const rawXml = mdxToWordXmlAndMedia(cleanedMdx, mdxPath, templateZip);
+  const rawXml = mdxToWordXmlAndMedia(combinedMdx, path.join(INPUT_DIR, `${documentConfig.name}.mdx`), templateZip);
 
   const doc = new Docxtemplater(templateZip, {
     paragraphLoop: true,
@@ -656,22 +798,19 @@ function generateDocx(mdxPath, templatePath, outputPath) {
   });
 
   doc.render({
-    cim: getTitleFromMdx(cleanedMdx, mdxPath),
-    alcim: getSubtitleFromMdx(cleanedMdx),
-    roviditett: path.basename(mdxPath, path.extname(mdxPath)),
+    cim: documentConfig.title || documentConfig.name,
+    alcim: documentConfig.subtitle || '',
+    roviditett: documentConfig.shortName || documentConfig.name,
     date: getFormattedDate(),
     mdx_tartalom: rawXml,
   });
 
-  // -------------------------------------------------
-  // RENDER UTÁNI FIXEK
-  // -------------------------------------------------
-
   forceAllTablesToTable1(doc.getZip());
-
+  ensureFirstColumnWidth(doc.getZip());
   normalizeBookmarksInDocument(doc.getZip());
-
   removeAllBookmarks(doc.getZip());
+  ensureImageNamespaces(doc.getZip());
+  enableAutoUpdateFields(doc.getZip());
 
   const buf = doc.getZip().generate({
     type: 'nodebuffer',
@@ -679,89 +818,143 @@ function generateDocx(mdxPath, templatePath, outputPath) {
   });
 
   fs.writeFileSync(outputPath, buf);
+
+  console.log(`[SIKERES] ${documentConfig.name} -> ${outputPath}`);
 }
 
-function convertDocumentationFolder(inputDir, outputDir, templatePath) {
-  console.log(`>>> Projekt gyökér: ${PROJECT_ROOT}`);
+async function runFromConfig() {
+  const config = loadConfig();
 
-  console.log(`>>> Input mappa: ${inputDir}`);
+  for (const documentConfig of config.documents) {
+    console.log(`\n>>> Dokumentum generálása: ${documentConfig.name}`);
 
-  console.log(`>>> Output mappa: ${outputDir}`);
-
-  console.log(`>>> Sablon: ${templatePath}`);
-
-  if (fs.existsSync(REFERENCE_DOCX)) {
-    console.log(`>>> Pandoc reference DOCX: ${REFERENCE_DOCX}`);
-  } else {
-    console.log('>>> FIGYELEM: reference.docx nem található, Pandoc alapstílusokat használ.');
+    await generateConfiguredDocx(documentConfig);
   }
 
-  if (!fs.existsSync(templatePath)) {
-    console.error(`HIBA: A sablon nem található:\n${templatePath}`);
+  console.log('\n>>> Minden dokumentum elkészült.');
+}
 
-    return;
-  }
-
-  if (!fs.existsSync(inputDir)) {
-    console.error(`HIBA: Az input mappa nem található:\n${inputDir}`);
-
-    return;
-  }
-
-  function walk(currentDir) {
-    const items = fs.readdirSync(currentDir);
-
-    items.forEach((item) => {
-      const fullPath = path.join(currentDir, item);
-
-      const stat = fs.statSync(fullPath);
-
-      if (stat.isDirectory()) {
-        walk(fullPath);
-        return;
-      }
-
-      if (!stat.isFile()) {
-        return;
-      }
-
-      const ext = path.extname(item).toLowerCase();
-
-      if (ext !== '.mdx' && ext !== '.md') {
-        return;
-      }
-
-      const relativePath = path.relative(inputDir, currentDir);
-
-      const targetFolder = path.join(outputDir, relativePath);
-
-      fs.mkdirSync(targetFolder, {
-        recursive: true,
-      });
-
-      const fileNameWithoutExt = path.basename(item, ext);
-
-      const outputPath = path.join(targetFolder, `${fileNameWithoutExt}.docx`);
-
-      try {
-        console.log(`\n>>> Konvertálás: ${path.join(relativePath, item)}`);
-
-        generateDocx(fullPath, templatePath, outputPath);
-
-        console.log(`[SIKERES] ${outputPath}`);
-      } catch (err) {
-        console.error(`[HIBA] ${path.join(relativePath, item)}`);
-
-        console.error(err.message);
-      }
+try {
+  await runFromConfig();
+} finally {
+  if (fs.existsSync(TEMP_IMAGE_DIR)) {
+    fs.rmSync(TEMP_IMAGE_DIR, {
+      recursive: true,
+      force: true,
     });
   }
-
-  walk(inputDir);
-
-  console.log('\n>>> Folyamat befejeződött!');
-
-  console.log(`>>> DOCX fájlok: ${OUTPUT_DIR}`);
 }
 
-convertDocumentationFolder(INPUT_DIR, OUTPUT_DIR, TEMPLATE_PATH);
+function ensureImageNamespaces(zip) {
+  const documentPath = 'word/document.xml';
+  const documentFile = zip.file(documentPath);
+
+  if (!documentFile) return;
+
+  let xml = documentFile.asText();
+
+  xml = xml.replace(/<w:document\b([^>]*)>/, (match, attrs) => {
+    const namespaces = {
+      'xmlns:r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+      'xmlns:wp': 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing',
+      'xmlns:a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
+      'xmlns:pic': 'http://schemas.openxmlformats.org/drawingml/2006/picture',
+    };
+
+    let newAttrs = attrs;
+
+    for (const [key, value] of Object.entries(namespaces)) {
+      if (!newAttrs.includes(`${key}=`)) {
+        newAttrs += ` ${key}="${value}"`;
+      }
+    }
+
+    return `<w:document${newAttrs}>`;
+  });
+
+  zip.file(documentPath, xml);
+}
+
+function ensureFirstColumnWidth(zip) {
+  const documentPath = 'word/document.xml';
+  const documentFile = zip.file(documentPath);
+
+  if (!documentFile) {
+    return;
+  }
+
+  let xml = documentFile.asText();
+
+  xml = xml.replace(/<w:tbl>([\s\S]*?)<\/w:tbl>/g, (fullTable, tableInner) => {
+    const firstRowMatch = tableInner.match(/<w:tr>([\s\S]*?)<\/w:tr>/);
+
+    if (!firstRowMatch) {
+      return fullTable;
+    }
+
+    let firstRow = firstRowMatch[0];
+
+    let firstCellHandled = false;
+
+    firstRow = firstRow.replace(/<w:tc>([\s\S]*?)<\/w:tc>/g, (cellMatch, cellInner) => {
+      if (firstCellHandled) {
+        return cellMatch;
+      }
+
+      firstCellHandled = true;
+
+      let updatedCell = cellInner;
+
+      const tcPrMatch = updatedCell.match(/<w:tcPr>([\s\S]*?)<\/w:tcPr>/);
+
+      const widthXml = `
+<w:tcW w:w="3200" w:type="dxa"/>
+`;
+
+      if (tcPrMatch) {
+        let tcPr = tcPrMatch[0];
+
+        tcPr = tcPr.replace(/<w:tcW[^>]*\/>/g, '');
+
+        tcPr = tcPr.replace('</w:tcPr>', `${widthXml}</w:tcPr>`);
+
+        updatedCell = updatedCell.replace(tcPrMatch[0], tcPr);
+      } else {
+        updatedCell = `<w:tcPr>${widthXml}</w:tcPr>${updatedCell}`;
+      }
+
+      return `<w:tc>${updatedCell}</w:tc>`;
+    });
+
+    const updatedTable = tableInner.replace(firstRowMatch[0], firstRow);
+
+    return `<w:tbl>${updatedTable}</w:tbl>`;
+  });
+
+  zip.file(documentPath, xml);
+}
+
+function enableAutoUpdateFields(zip) {
+  const settingsPath = 'word/settings.xml';
+  const settingsFile = zip.file(settingsPath);
+
+  if (!settingsFile) {
+    const settingsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:updateFields w:val="true"/>
+</w:settings>`;
+
+    zip.file(settingsPath, settingsXml);
+    return;
+  }
+
+  let xml = settingsFile.asText();
+
+  if (xml.includes('<w:updateFields')) {
+    xml = xml.replace(/<w:updateFields[^>]*\/>/g, '<w:updateFields w:val="true"/>');
+  } else {
+    xml = xml.replace('</w:settings>', '<w:updateFields w:val="true"/></w:settings>');
+  }
+
+  zip.file(settingsPath, xml);
+}
