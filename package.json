@@ -1,0 +1,25 @@
+{
+  "name": "mint2docx",
+  "version": "1.0.0",
+  "type": "module",
+  "bin": {
+    "mint2docx": "./src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "docx": "^9.6.1",
+    "docxtemplater": "^3.68.7",
+    "fast-glob": "^3.3.3",
+    "fs-extra": "^11.3.5",
+    "gray-matter": "^4.0.3",
+    "image-size": "^2.0.2",
+    "marked": "^18.0.3",
+    "mime-types": "^3.0.2",
+    "pandoc": "^0.2.0",
+    "pizzip": "^3.2.0",
+    "xml2js": "^0.6.2"
+  }
+}
